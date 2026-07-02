@@ -291,7 +291,7 @@ export default function MilestoneCard({ milestone, index, onEvaluate }) {
 
                     {isApproved && (
                         <p style={{ fontSize: '0.65rem', color: '#10b981', opacity: 0.5, textAlign: 'center', marginTop: '10px', fontWeight: 700, letterSpacing: '0.08em' }}>
-                            ðŸ¤– SECURED BY AI ORACLE Â· HASHKEY CHAIN
+                            SECURED BY AI ORACLE · CASPER NETWORK
                         </p>
                     )}
                 </div>

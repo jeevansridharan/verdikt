@@ -16,7 +16,7 @@ export default function Navbar() {
                     </div>
                     <div>
                         <span className="text-xl font-bold tracking-tight" style={{ background: 'linear-gradient(135deg, #10b981, #06b6d4)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                            Arbit
+                            Verdikt
                         </span>
                         <div className="text-xs text-slate-500 font-medium -mt-0.5">AI-powered Autonomous Funding</div>
                     </div>

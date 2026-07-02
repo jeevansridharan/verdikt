@@ -81,7 +81,7 @@ export default function Sidebar() {
                 {!collapsed && (
                     <div style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
                         <span style={{ color: '#fff', fontWeight: 800, fontSize: '1.1rem', letterSpacing: '-0.02em' }}>
-                            Arbit
+                            Verdikt
                         </span>
                         <div style={{
                             fontSize: '0.65rem',
@@ -90,7 +90,7 @@ export default function Sidebar() {
                             letterSpacing: '0.08em',
                             marginTop: '1px',
                         }}>
-                            HASHKEY CHAIN
+                            CASPER NETWORK
                         </div>
                     </div>
                 )}

@@ -23,6 +23,29 @@ export const CASPER_EXPLORER_URL =
 
 const rpc = new RpcClient(new HttpHandler(CASPER_NODE_URL))
 
+/**
+ * getCasperProvider()
+ *
+ * Polls for window.CasperWalletProvider every 100 ms for up to 2 seconds
+ * (20 attempts). Resolves with the provider constructor if found, or null
+ * if the extension is not installed / not yet injected.
+ *
+ * This prevents false "not installed" errors on slow extension injection.
+ */
+export const getCasperProvider = () =>
+  new Promise((resolve) => {
+    let attempts = 0
+    const interval = setInterval(() => {
+      if (window.CasperWalletProvider) {
+        clearInterval(interval)
+        resolve(window.CasperWalletProvider)
+      } else if (++attempts > 20) {
+        clearInterval(interval)
+        resolve(null)
+      }
+    }, 100)
+  })
+
 function walletProvider() {
   if (typeof window === 'undefined' || !window.CasperWalletProvider) {
     throw new Error('Casper Wallet is not installed.')

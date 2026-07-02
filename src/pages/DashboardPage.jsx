@@ -121,12 +121,12 @@ export default function DashboardPage() {
                     background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)',
                 }}>
                     <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px rgba(16,185,129,0.8)' }} />
-                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#34d399', letterSpacing: '0.06em' }}>LIVE Â· HASHKEY CHAIN</span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#34d399', letterSpacing: '0.06em' }}>LIVE · CASPER NETWORK</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
                     <div>
                         <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.03em', marginBottom: '4px' }}>
-                            Welcome to Arbit
+                            Welcome to Verdikt
                         </h1>
                         <p style={{ color: '#10b981', fontSize: '0.88rem', fontWeight: 600, marginBottom: '4px' }}>
                             AI-powered autonomous funding protocol
@@ -209,7 +209,7 @@ export default function DashboardPage() {
             {/* â”€â”€ How Arbit Works â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             <div style={{ background: 'rgba(15,17,35,0.85)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '28px', backdropFilter: 'blur(20px)' }}>
                 <h2 style={{ color: '#e2e8f0', fontWeight: 700, fontSize: '1rem', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Zap size={18} color="#10b981" /> How Arbit Works
+                    <Zap size={18} color="#10b981" /> How Verdikt Works
                 </h2>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '20px' }}>
                     {[

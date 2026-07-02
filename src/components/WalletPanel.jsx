@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { ExternalLink, Loader2, RefreshCw, Wallet } from 'lucide-react'
+import { Download, ExternalLink, Loader2, RefreshCw, Wallet } from 'lucide-react'
+import { getCasperProvider } from '../services/casperClient'
 import {
   connectCasperWallet,
   disconnectCasperWallet,
@@ -16,6 +17,8 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
   const [deployHash, setDeployHash] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // null = unchecked, true = found, false = not installed
+  const [walletAvailable, setWalletAvailable] = useState(null)
 
   const refreshBalance = useCallback(async () => {
     if (!publicKey) return
@@ -29,6 +32,15 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
   useEffect(() => {
     refreshBalance()
   }, [refreshBalance])
+
+  // Poll for wallet extension on mount (up to 2 s)
+  useEffect(() => {
+    let cancelled = false
+    getCasperProvider().then((provider) => {
+      if (!cancelled) setWalletAvailable(provider !== null)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   const connect = async () => {
     setLoading(true)
@@ -70,6 +82,78 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
     }
   }
 
+  // ── Wallet checking spinner ──────────────────────────────────────────────
+  if (walletAvailable === null) {
+    return (
+      <div className="card-glass rounded-2xl p-6 mb-6">
+        <div className="flex items-center gap-3">
+          <Loader2 size={18} className="animate-spin" color="#10b981" />
+          <p className="text-slate-400 text-sm">Detecting Casper Wallet…</p>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Wallet not installed card ─────────────────────────────────────────────
+  if (walletAvailable === false) {
+    return (
+      <div
+        className="card-glass rounded-2xl p-6 mb-6"
+        style={{
+          border: '1px solid rgba(0,192,127,0.18)',
+          boxShadow: '0 0 28px rgba(0,192,127,0.07)',
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-3 mb-4">
+          <div
+            style={{
+              width: 40, height: 40, borderRadius: 12,
+              background: 'rgba(0,192,127,0.1)',
+              border: '1px solid rgba(0,192,127,0.25)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Wallet size={19} color="#00C07F" />
+          </div>
+          <div>
+            <h2 className="text-white font-bold text-base leading-tight">Casper Wallet Required</h2>
+            <p className="text-slate-500 text-xs mt-0.5">Casper Testnet · CSPR</p>
+          </div>
+        </div>
+
+        {/* Description */}
+        <p className="text-slate-400 text-sm mb-5 leading-relaxed">
+          To fund or interact with this project, you need the{' '}
+          <span className="text-emerald-400 font-medium">Casper Wallet</span> browser extension.
+        </p>
+
+        {/* Install button */}
+        <a
+          href="https://casperwallet.io"
+          target="_blank"
+          rel="noreferrer"
+          className="w-full py-3.5 rounded-xl font-bold text-white gradient-btn-green flex items-center justify-center gap-2 no-underline"
+          style={{ display: 'flex' }}
+        >
+          <Download size={16} />
+          Install Casper Wallet
+        </a>
+
+        {/* Already installed refresh link */}
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-3 w-full text-center text-slate-500 hover:text-emerald-400 text-xs transition-colors duration-200"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0' }}
+        >
+          Already installed? Refresh the page
+        </button>
+      </div>
+    )
+  }
+
+  // ── Normal wallet UI ──────────────────────────────────────────────────────
   return (
     <div className="card-glass rounded-2xl p-6 mb-6">
       <div className="flex items-center gap-3 mb-5">
