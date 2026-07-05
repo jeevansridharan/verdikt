@@ -279,88 +279,125 @@ export async function getCsprBalance(publicKeyHex) {
   }
 }
 
-// ── Deploy signing & submission ───────────────────────────────────────────────
-
 /**
  * signAndSubmit(deploy, publicKeyHex)
  *
- * FIX — Bug 2: replaced Deploy.fromJSON round-trip with Deploy.setSignature.
+ * Sends the deploy to the Casper Wallet for signing, then submits it to the RPC.
  *
- * WHY "The JSON can't be parsed as a Deploy" WAS HAPPENING:
- *   The old code called Deploy.fromJSON() on the wallet's response. fromJSON()
- *   internally calls deploy.validate() which re-verifies EVERY approval signature
- *   using the secp256k1 library. The Casper Wallet extension returns the signature
- *   as a hex string that, after being parsed by the SDK's TypedJSON deserializer,
- *   sometimes ends up in a format the secp256k1 DER parser rejects — causing
- *   "Invalid signature tag" which gets caught and re-thrown as
- *   "Serialization error: The JSON can't be parsed as a Deploy."
+ * ── Wallet API history ─────────────────────────────────────────────────────
+ * Casper Wallet Extension has shipped two distinct sign() response shapes:
  *
- * THE FIX:
- *   Skip Deploy.fromJSON entirely. Instead:
- *   1. Pass the original deploy (which we already have as a proper Deploy object)
- *   2. Extract the raw signature hex from the wallet response
- *   3. Call Deploy.setSignature(deploy, signatureBytes, publicKey)
- *      This patches the approval onto the existing Deploy object without any
- *      JSON round-trip or re-validation, so signature format differences
- *      between wallet versions don't matter.
+ *   v1 (old): sign() returned the FULL signed deploy object
+ *     { cancelled: boolean, deploy: { hash, header, payment, session, approvals: [{signer, signature}] } }
+ *     Our code extracted approvals[].signature and called Deploy.setSignature.
+ *
+ *   v2 (current, what the user sees in console):
+ *     { cancelled: boolean, signatureHex: string, signature: Uint8Array }
+ *     The wallet returns ONLY the raw signature bytes — NOT a signed deploy.
+ *     The app is responsible for attaching the signature to the deploy using
+ *     Deploy.setSignature(deploy, sigBytes, publicKey).
+ *
+ * This function handles BOTH shapes in priority order:
+ *   1. walletResponse.signature  (Uint8Array)  — v2 current API  ← primary
+ *   2. walletResponse.signatureHex (string)     — v2 fallback
+ *   3. walletResponse.deploy?.approvals         — v1 legacy shape
+ *   4. walletResponse.signedDeploy?.approvals   — v1 legacy shape (alt key)
+ *
+ * In every case, Deploy.setSignature() attaches the approval to the deploy
+ * object we already built — NO Deploy.fromJSON round-trip, NO re-validation.
  */
 async function signAndSubmit(deploy, publicKeyHex) {
   const provider = walletProvider()
+  const pk       = PublicKey.fromHex(publicKeyHex)
 
-  // Serialize the deploy to the JSON format the wallet expects
+  // ── 1. Serialize deploy for the wallet ──────────────────────────────────
   const deployJson    = Deploy.toJSON(deploy)
   const deployJsonStr = JSON.stringify(deployJson)
-  console.log('[casperClient] signAndSubmit: sender     =', publicKeyHex)
-  console.log('[casperClient] signAndSubmit: deploy hash =', deployJson.hash)
-  console.log('[casperClient] signAndSubmit: chain name =', deployJson.header?.chain_name)
-  console.log('[casperClient] signAndSubmit: deploy JSON (first 300):', deployJsonStr.slice(0, 300))
 
-  console.log('[casperClient] signAndSubmit: requesting signature from wallet…')
+  console.log('[casperClient] signAndSubmit ───────────────────────────────')
+  console.log('[casperClient]   Sender      :', publicKeyHex)
+  console.log('[casperClient]   Deploy hash :', deployJson.hash)
+  console.log('[casperClient]   Chain name  :', deployJson.header?.chain_name)
+  console.log('[casperClient]   Unsigned deploy JSON (first 400):')
+  console.log('[casperClient]  ', deployJsonStr.slice(0, 400))
+
+  // ── 2. Request signature from wallet ───────────────────────────────────
+  console.log('[casperClient]   Requesting signature from Casper Wallet…')
   const walletResponse = await provider.sign(deployJsonStr, publicKeyHex)
-  console.log('[casperClient] signAndSubmit: raw wallet response:', JSON.stringify(walletResponse)?.slice(0, 400))
 
-  if (!walletResponse || walletResponse.cancelled) {
+  console.log('[casperClient]   Raw wallet response keys :', walletResponse ? Object.keys(walletResponse) : 'null')
+  console.log('[casperClient]   Raw wallet response      :', JSON.stringify(
+    walletResponse,
+    (_k, v) => v instanceof Uint8Array ? `Uint8Array(${v.length})` : v,
+  )?.slice(0, 400))
+
+  // ── 3. Guard: cancelled ─────────────────────────────────────────────────
+  if (!walletResponse || walletResponse.cancelled === true) {
     throw new Error('Transaction signing was cancelled.')
   }
 
-  // Extract the signed deploy object from wherever the wallet put it
-  const signedDeployData =
-    walletResponse?.deploy ??
-    walletResponse?.signedDeploy ??
-    (typeof walletResponse === 'object' && walletResponse?.hash ? walletResponse : null)
+  // ── 4. Extract signature bytes ──────────────────────────────────────────
+  // Priority: Uint8Array > signatureHex > legacy deploy.approvals
+  let sigBytes = null
 
-  if (!signedDeployData) {
-    console.error('[casperClient] signAndSubmit: could not locate signed deploy in wallet response:', walletResponse)
-    throw new Error('Wallet returned an unexpected response format. Check the console for details.')
+  if (walletResponse.signature instanceof Uint8Array && walletResponse.signature.length > 0) {
+    // ── v2 API: wallet returned raw Uint8Array ─────────────────────────
+    sigBytes = walletResponse.signature
+    console.log('[casperClient]   Signature source : walletResponse.signature (Uint8Array, length=' + sigBytes.length + ')')
+
+  } else if (typeof walletResponse.signatureHex === 'string' && walletResponse.signatureHex.length > 0) {
+    // ── v2 API: wallet returned hex string ────────────────────────────
+    const hex = walletResponse.signatureHex.replace(/^0x/, '')
+    sigBytes  = HexBytes.fromHex(hex).bytes
+    console.log('[casperClient]   Signature source : walletResponse.signatureHex (', walletResponse.signatureHex.slice(0, 20), '…)')
+
+  } else {
+    // ── v1 API: wallet returned a signed deploy object ────────────────
+    const signedDeployData =
+      walletResponse?.deploy ??
+      walletResponse?.signedDeploy ??
+      (typeof walletResponse === 'object' && walletResponse?.hash ? walletResponse : null)
+
+    if (!signedDeployData) {
+      console.error('[casperClient]   Full wallet response:', walletResponse)
+      throw new Error(
+        'Casper Wallet returned an unrecognised response format. ' +
+        'Expected: { signatureHex, signature } or { deploy: { approvals } }. ' +
+        'Check the console for the full wallet response.'
+      )
+    }
+
+    const approvals = signedDeployData?.approvals ?? []
+    console.log('[casperClient]   Signature source : legacy deploy.approvals (count=' + approvals.length + ')')
+
+    if (approvals.length === 0) {
+      throw new Error('Wallet returned a signed deploy with no approvals. Signing may have failed.')
+    }
+
+    // Use the first approval's signature hex
+    const sigHex = approvals[0]?.signature ?? ''
+    sigBytes     = HexBytes.fromHex(sigHex.replace(/^0x/, '')).bytes
   }
 
-  console.log('[casperClient] signAndSubmit: signedDeployData keys =', Object.keys(signedDeployData))
+  // ── 5. Attach the signature to the deploy ──────────────────────────────
+  console.log('[casperClient]   Attaching signature (', sigBytes.length, 'bytes) to deploy…')
+  const signedDeploy = Deploy.setSignature(deploy, sigBytes, pk)
+  console.log('[casperClient]   Approvals after attach :', signedDeploy.approvals.length)
 
-  // Extract the approval(s) — wallet adds them to the approvals array
-  const approvals = signedDeployData?.approvals ?? []
-  console.log('[casperClient] signAndSubmit: approvals count =', approvals.length)
+  // ── 6. Submit to RPC ────────────────────────────────────────────────────
+  const signedDeployJson = Deploy.toJSON(signedDeploy)
+  console.log('[casperClient]   RPC submit payload (first 300):', JSON.stringify(signedDeployJson).slice(0, 300))
+  console.log('[casperClient]   Submitting deploy to RPC…')
 
-  if (approvals.length === 0) {
-    throw new Error('Wallet returned a signed deploy with no approvals. Signing may have failed.')
-  }
-
-  // Apply each approval onto the original deploy object using Deploy.setSignature.
-  // This avoids Deploy.fromJSON (which re-validates signatures and can fail on
-  // certain wallet signature encodings).
-  const pk = PublicKey.fromHex(publicKeyHex)
-  let signedDeploy = deploy
-  for (const approval of approvals) {
-    const sigHex = approval.signature ?? ''
-    console.log('[casperClient] signAndSubmit: applying approval signature (first 20):', sigHex.slice(0, 20))
-    const sigBytes = HexBytes.fromHex(sigHex).bytes
-    signedDeploy = Deploy.setSignature(signedDeploy, sigBytes, pk)
-  }
-
-  console.log('[casperClient] signAndSubmit: sending deploy to RPC…')
   const result = await rpc.putDeploy(signedDeploy)
-  console.log('[casperClient] signAndSubmit: deploy hash =', result.deployHash)
-  return result.deployHash
+  const deployHash = result.deployHash
+
+  console.log('[casperClient]   Deploy hash returned by RPC :', deployHash)
+  console.log('[casperClient] signAndSubmit complete ✓ ────────────────────')
+
+  return deployHash
 }
+
 
 // ── Public transfer & contract helpers ────────────────────────────────────────
 
