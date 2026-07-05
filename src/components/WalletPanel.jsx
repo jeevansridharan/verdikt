@@ -82,21 +82,37 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
 
       if (cancelled) return
 
-      // Verify the live account actually exists on-chain before trusting it
+      // Verify the live account exists on-chain and fetch balance
       try {
         console.log('[WalletPanel] restoreSession: verifying account on-chain…')
-        await getCsprBalance(liveKey)   // throws -32009 if account doesn't exist
-        // Account is valid — restore the session
+        await getCsprBalance(liveKey)
+        // Account is funded and valid — restore the session normally
         localStorage.setItem('arbit_casper_public_key', liveKey)
         setPublicKey(liveKey)
         onWalletConnect?.({ publicKey: liveKey })
         console.log('[WalletPanel] restoreSession: session restored ✓')
       } catch (err) {
-        const friendly = translateCasperError(err)
-        console.error('[WalletPanel] restoreSession: on-chain check failed —', friendly)
-        // Clear any stale key so the user sees the Connect button
-        localStorage.removeItem('arbit_casper_public_key')
-        if (!cancelled) setError(friendly)
+        const rawMsg = err?.message ?? String(err)
+        const isUnfunded = rawMsg.toLowerCase().includes('purse not found') ||
+                           rawMsg.toLowerCase().includes('not been activated') ||
+                           (err?.code === -32026)
+
+        if (isUnfunded) {
+          // -32026: account is valid but unfunded. The key is correct and the wallet
+          // is on the right network — the account just needs testnet CSPR.
+          // Restore the session (show the connected UI) but display a faucet notice.
+          console.warn('[WalletPanel] restoreSession: account unfunded (-32026) — restoring session with 0 balance')
+          localStorage.setItem('arbit_casper_public_key', liveKey)
+          setPublicKey(liveKey)
+          setBalance(0)
+          onWalletConnect?.({ publicKey: liveKey })
+          if (!cancelled) setError(translateCasperError(err))
+        } else {
+          // Any other error (wrong key, wrong network, etc.) — refuse to connect
+          console.error('[WalletPanel] restoreSession: on-chain check failed —', rawMsg)
+          localStorage.removeItem('arbit_casper_public_key')
+          if (!cancelled) setError(translateCasperError(err))
+        }
       }
     }
 
@@ -260,7 +276,26 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
         </>
       )}
 
-      {error && <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs">{error}</div>}
+      {error && (
+        <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs leading-relaxed">
+          {error.includes('testnet.cspr.live/tools/faucet') ? (
+            <>
+              {error.split('https://testnet.cspr.live/tools/faucet')[0]}
+              <a
+                href="https://testnet.cspr.live/tools/faucet"
+                target="_blank"
+                rel="noreferrer"
+                className="underline font-bold text-amber-200 hover:text-white"
+              >
+                testnet.cspr.live/tools/faucet
+              </a>
+              {error.split('https://testnet.cspr.live/tools/faucet')[1]}
+            </>
+          ) : (
+            <span className="text-red-400">{error}</span>
+          )}
+        </div>
+      )}
       {deployHash && (
         <a href={explorerDeployUrl(deployHash)} target="_blank" rel="noreferrer" className="mt-4 flex items-center gap-2 text-emerald-400 text-xs">
           View deploy <ExternalLink size={13} />
