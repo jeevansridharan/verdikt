@@ -1,22 +1,24 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Download, ExternalLink, Loader2, RefreshCw, Wallet } from 'lucide-react'
-import { getCasperProvider } from '../services/casperClient'
 import {
   connectCasperWallet,
   disconnectCasperWallet,
   explorerDeployUrl,
+  getCasperProvider,
   getCsprBalance,
+  getActiveWalletAccount,
   shortenPublicKey,
   transferCspr,
+  translateCasperError,
 } from '../services/casperClient'
 
 export default function WalletPanel({ onRealFund, onWalletConnect }) {
-  const [publicKey, setPublicKey] = useState('')
-  const [balance, setBalance] = useState(null)
-  const [amount, setAmount] = useState('')
-  const [deployHash, setDeployHash] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [publicKey, setPublicKey]       = useState('')
+  const [balance, setBalance]           = useState(null)
+  const [amount, setAmount]             = useState('')
+  const [deployHash, setDeployHash]     = useState('')
+  const [loading, setLoading]           = useState(false)
+  const [error, setError]               = useState('')
   // null = unchecked, true = found, false = not installed
   const [walletAvailable, setWalletAvailable] = useState(null)
 
@@ -25,7 +27,7 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
     try {
       setBalance(await getCsprBalance(publicKey))
     } catch (err) {
-      setError(err.message)
+      setError(translateCasperError(err))
     }
   }, [publicKey])
 
@@ -33,24 +35,76 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
     refreshBalance()
   }, [refreshBalance])
 
-  // Poll for wallet extension on mount (up to 2 s)
+  // ── Step 1: detect wallet extension (up to 2 s) ──────────────────────────
   useEffect(() => {
     let cancelled = false
     getCasperProvider().then((provider) => {
-      if (!cancelled) setWalletAvailable(provider !== null)
+      if (!cancelled) {
+        console.log('[WalletPanel] wallet extension present:', provider !== null)
+        setWalletAvailable(provider !== null)
+      }
     })
     return () => { cancelled = true }
   }, [])
 
-  // Restore connected wallet from previous session
+  // ── Step 2: once wallet is confirmed present, ask it for the LIVE account ──
+  //
+  // FIX: We no longer blindly trust localStorage. Instead we call
+  // getActiveWalletAccount() which queries the extension directly.
+  // If the account no longer exists on-chain (would cause -32009), we clear
+  // the stale cache and show a helpful message — instead of crashing.
   useEffect(() => {
     if (walletAvailable !== true || publicKey) return
-    const savedKey = localStorage.getItem('arbit_casper_public_key')
-    if (savedKey) {
-      setPublicKey(savedKey)
-      onWalletConnect?.({ publicKey: savedKey })
+
+    let cancelled = false
+
+    const restoreSession = async () => {
+      const cachedKey = localStorage.getItem('arbit_casper_public_key')
+      console.log('[WalletPanel] restoreSession: cached key =', cachedKey?.slice(0, 12) ?? '(none)')
+
+      // Ask the live extension what's currently active
+      const liveKey = await getActiveWalletAccount()
+      console.log('[WalletPanel] restoreSession: live key  =', liveKey?.slice(0, 12) ?? '(none)')
+
+      if (!liveKey) {
+        // Wallet has no active account — clear stale cache and wait for user to connect
+        if (cachedKey) {
+          console.warn('[WalletPanel] restoreSession: live key is null, clearing stale cache')
+          localStorage.removeItem('arbit_casper_public_key')
+        }
+        return
+      }
+
+      if (cachedKey && cachedKey !== liveKey) {
+        console.warn('[WalletPanel] restoreSession: cached key differs from live key — using live key')
+        localStorage.removeItem('arbit_casper_public_key')
+      }
+
+      if (cancelled) return
+
+      // Verify the live account actually exists on-chain before trusting it
+      try {
+        console.log('[WalletPanel] restoreSession: verifying account on-chain…')
+        await getCsprBalance(liveKey)   // throws -32009 if account doesn't exist
+        // Account is valid — restore the session
+        localStorage.setItem('arbit_casper_public_key', liveKey)
+        setPublicKey(liveKey)
+        onWalletConnect?.({ publicKey: liveKey })
+        console.log('[WalletPanel] restoreSession: session restored ✓')
+      } catch (err) {
+        const friendly = translateCasperError(err)
+        console.error('[WalletPanel] restoreSession: on-chain check failed —', friendly)
+        // Clear any stale key so the user sees the Connect button
+        localStorage.removeItem('arbit_casper_public_key')
+        if (!cancelled) setError(friendly)
+      }
     }
+
+    restoreSession()
+    return () => { cancelled = true }
   }, [walletAvailable, publicKey, onWalletConnect])
+
+  // ── Actions ───────────────────────────────────────────────────────────────
 
   const connect = async () => {
     setLoading(true)
@@ -60,7 +114,7 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
       setPublicKey(wallet.publicKey)
       onWalletConnect?.(wallet)
     } catch (err) {
-      setError(err.message)
+      setError(translateCasperError(err))
     } finally {
       setLoading(false)
     }
@@ -70,6 +124,7 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
     await disconnectCasperWallet()
     setPublicKey('')
     setBalance(null)
+    setError('')
     onWalletConnect?.(null)
   }
 
@@ -86,13 +141,13 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
       onRealFund?.(Number(amount), hash, publicKey)
       await refreshBalance()
     } catch (err) {
-      setError(err.message)
+      setError(translateCasperError(err))
     } finally {
       setLoading(false)
     }
   }
 
-  // ── Wallet checking spinner ──────────────────────────────────────────────
+  // ── Wallet checking spinner ────────────────────────────────────────────────
   if (walletAvailable === null) {
     return (
       <div className="card-glass rounded-2xl p-6 mb-6">
@@ -134,10 +189,18 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
         </div>
 
         {/* Description */}
-        <p className="text-slate-400 text-sm mb-5 leading-relaxed">
+        <p className="text-slate-400 text-sm mb-4 leading-relaxed">
           To fund or interact with this project, you need the{' '}
           <span className="text-emerald-400 font-medium">Casper Wallet</span> browser extension.
         </p>
+
+        {/* Steps */}
+        <ol className="text-slate-500 text-xs mb-5 leading-relaxed space-y-1 pl-4 list-decimal">
+          <li>Install Casper Wallet from <span className="text-emerald-400">casperwallet.io</span></li>
+          <li>Open the extension and create or import an account</li>
+          <li>Make sure the extension is set to <span className="text-emerald-400">Testnet</span></li>
+          <li>Refresh this page and click Connect</li>
+        </ol>
 
         {/* Install button */}
         <a

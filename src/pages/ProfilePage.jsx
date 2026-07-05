@@ -1,17 +1,19 @@
-﻿/**
+/**
  * pages/ProfilePage.jsx
  * Casper Wallet identity + account overview
  */
 
 import React, { useState, useEffect } from 'react'
-import { Copy, CheckCircle, Wallet, Shield, ExternalLink, LogOut } from 'lucide-react'
+import { Copy, CheckCircle, Wallet, Shield, ExternalLink, LogOut, AlertCircle } from 'lucide-react'
 import {
     CASPER_EXPLORER_URL,
     disconnectCasperWallet,
     getCsprBalance,
+    getActiveWalletAccount,
+    translateCasperError,
 } from '../services/casperClient'
 
-// â”€â”€ Info row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Info row ──────────────────────────────────────────────────────────────────
 function InfoRow({ label, value, mono = false, color = '#94a3b8' }) {
     return (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
@@ -23,29 +25,63 @@ function InfoRow({ label, value, mono = false, color = '#94a3b8' }) {
     )
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 export default function ProfilePage() {
-    const [address, setAddress] = useState('')
-    const [copied, setCopied] = useState(false)
-    const [balance, setBalance] = useState(0)
-    const [loading, setLoading] = useState(false)
+    const [address, setAddress]   = useState('')
+    const [copied, setCopied]     = useState(false)
+    const [balance, setBalance]   = useState(0)
+    const [loading, setLoading]   = useState(false)
+    const [loadError, setLoadError] = useState('')
 
     useEffect(() => {
         const loadConnectedWallet = async () => {
-            const publicKey = localStorage.getItem('arbit_casper_public_key')
-            if (publicKey) {
-                setLoading(true)
-                try {
-                    setAddress(publicKey)
-                    const bal = await getCsprBalance(publicKey)
-                    setBalance(bal)
-                } catch (err) {
-                    console.error('[ProfilePage] Failed to reconnect wallet:', err)
-                } finally {
-                    setLoading(false)
+            setLoading(true)
+            setLoadError('')
+
+            const cachedKey = localStorage.getItem('arbit_casper_public_key')
+            console.log('[ProfilePage] loadConnectedWallet: cached key =', cachedKey?.slice(0, 12) ?? '(none)')
+
+            // Always ask the live extension for the current account.
+            // Never blindly trust localStorage — that is the root cause of -32009.
+            const liveKey = await getActiveWalletAccount()
+            console.log('[ProfilePage] loadConnectedWallet: live key  =', liveKey?.slice(0, 12) ?? '(none)')
+
+            if (!liveKey) {
+                // No active account in the wallet extension
+                if (cachedKey) {
+                    console.warn('[ProfilePage] loadConnectedWallet: no live key, clearing stale cache')
+                    localStorage.removeItem('arbit_casper_public_key')
                 }
+                setLoading(false)
+                return
+            }
+
+            if (cachedKey && cachedKey !== liveKey) {
+                console.warn('[ProfilePage] loadConnectedWallet: cached key differs from live key — using live key')
+                localStorage.removeItem('arbit_casper_public_key')
+            }
+
+            // Verify the account exists on-chain before displaying it
+            try {
+                console.log('[ProfilePage] loadConnectedWallet: fetching on-chain balance…')
+                const bal = await getCsprBalance(liveKey)
+                console.log('[ProfilePage] loadConnectedWallet: balance =', bal, 'CSPR')
+
+                // Account confirmed valid — update cache and display
+                localStorage.setItem('arbit_casper_public_key', liveKey)
+                setAddress(liveKey)
+                setBalance(bal)
+            } catch (err) {
+                const friendly = translateCasperError(err)
+                console.error('[ProfilePage] loadConnectedWallet: on-chain check failed —', friendly)
+                // Clear stale key so wallet panel shows Connect button
+                localStorage.removeItem('arbit_casper_public_key')
+                setLoadError(friendly)
+            } finally {
+                setLoading(false)
             }
         }
+
         loadConnectedWallet()
     }, [])
 
@@ -60,6 +96,7 @@ export default function ProfilePage() {
         await disconnectCasperWallet()
         setAddress('')
         setBalance(0)
+        setLoadError('')
         window.location.reload()
     }
 
@@ -84,11 +121,25 @@ export default function ProfilePage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
                             <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: address ? '#3b82f6' : '#475569', boxShadow: address ? '0 0 6px rgba(59,130,246,0.8)' : 'none' }} />
                             <span style={{ fontSize: '0.75rem', color: address ? '#3b82f6' : '#475569', fontWeight: 600 }}>
-                                {address ? 'Active Session Â· Casper' : 'Session Inactive'}
+                                {loading ? 'Checking account…' : address ? 'Active Session · Casper' : 'Session Inactive'}
                             </span>
                         </div>
                     </div>
                 </div>
+
+                {/* Error banner */}
+                {loadError && (
+                    <div style={{
+                        display: 'flex', alignItems: 'flex-start', gap: '10px',
+                        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+                        borderRadius: '10px', padding: '12px 14px', marginBottom: '16px',
+                    }}>
+                        <AlertCircle size={15} color="#f87171" style={{ flexShrink: 0, marginTop: '1px' }} />
+                        <p style={{ color: '#f87171', fontSize: '0.8rem', lineHeight: 1.6, margin: 0 }}>
+                            {loadError}
+                        </p>
+                    </div>
+                )}
 
                 {address ? (
                     <>
@@ -127,7 +178,9 @@ export default function ProfilePage() {
                 ) : (
                     <div style={{ textAlign: 'center', padding: '20px 0' }}>
                         <p style={{ color: '#475569', fontSize: '0.875rem', marginBottom: '16px' }}>
-                            Connect your wallet to see your profile details.
+                            {loadError
+                                ? 'Connect your wallet after resolving the issue above.'
+                                : 'Connect your wallet to see your profile details.'}
                         </p>
                     </div>
                 )}
@@ -147,7 +200,7 @@ export default function ProfilePage() {
                     'Testnet Warning: This is a dev environment. Use only testnet CSPR.',
                     'Identity: Your profile is derived from your connected Casper public key.',
                 ].map((note, i) => (
-                    <p key={i} style={{ color: '#64748b', fontSize: '0.8rem', lineHeight: 1.7 }}>â€¢ {note}</p>
+                    <p key={i} style={{ color: '#64748b', fontSize: '0.8rem', lineHeight: 1.7 }}>• {note}</p>
                 ))}
             </div>
 
@@ -167,4 +220,3 @@ export default function ProfilePage() {
         </div>
     )
 }
-
