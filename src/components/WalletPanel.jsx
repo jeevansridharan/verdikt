@@ -42,6 +42,16 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
     return () => { cancelled = true }
   }, [])
 
+  // Restore connected wallet from previous session
+  useEffect(() => {
+    if (walletAvailable !== true || publicKey) return
+    const savedKey = localStorage.getItem('arbit_casper_public_key')
+    if (savedKey) {
+      setPublicKey(savedKey)
+      onWalletConnect?.({ publicKey: savedKey })
+    }
+  }, [walletAvailable, publicKey, onWalletConnect])
+
   const connect = async () => {
     setLoading(true)
     setError('')

@@ -15,8 +15,18 @@ const {
   makeCsprTransferDeploy,
 } = CasperSdk
 
-export const CASPER_NODE_URL =
-  import.meta.env.VITE_CASPER_NODE_URL || 'https://node.testnet.casper.network/rpc'
+// Browser apps cannot call the Casper RPC node directly (CORS). Route through /casper-rpc.
+function resolveRpcUrl() {
+  if (import.meta.env.VITE_CASPER_NODE_URL) {
+    return import.meta.env.VITE_CASPER_NODE_URL
+  }
+  if (typeof window !== 'undefined') {
+    return '/casper-rpc'
+  }
+  return 'https://node.testnet.casper.network/rpc'
+}
+
+export const CASPER_NODE_URL = resolveRpcUrl()
 export const CASPER_CHAIN_NAME = import.meta.env.VITE_CASPER_CHAIN_NAME || 'casper-test'
 export const CASPER_EXPLORER_URL =
   import.meta.env.VITE_CASPER_EXPLORER_URL || 'https://testnet.cspr.live'
