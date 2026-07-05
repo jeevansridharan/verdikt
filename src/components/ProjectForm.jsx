@@ -1,4 +1,4 @@
-﻿/**
+/**
  * src/components/ProjectForm.jsx
  *
  * Project creation form.
@@ -71,8 +71,8 @@ export default function ProjectForm({ onProjectCreate, walletAddress }) {
         const projectData = {
             title: title.trim(),
             description: description.trim(),
-            goal_amount: Number(fundingTarget),       // â† DB column name
-            owner_wallet: walletAddress ?? '0xAddressUnknown',  // â† DB column name
+            goal_amount: Number(fundingTarget),       // ← DB column name
+            owner_wallet: walletAddress ?? '',  // ← DB column name; wallet connection is required before submit
             milestones: milestones.map((m, i) => ({
                 id: i,
                 title: m,
