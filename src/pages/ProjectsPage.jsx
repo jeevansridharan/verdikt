@@ -1,10 +1,11 @@
-﻿import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
     FolderKanban, Plus, RefreshCw,
     AlertCircle, Inbox,
 } from 'lucide-react'
 
 import { createProject, deleteProject, updateRaisedAmount, fetchProjects as dbFetchProjects } from '../lib/db/projects'
+import { getActiveWalletAccount } from '../services/casperClient'
 import { insertTransaction } from '../lib/db/transactions'
 import { createMilestoneBatch } from '../lib/db/milestones'
 import { voteOnMilestone, hasUserVoted } from '../lib/db/votes'
@@ -13,11 +14,11 @@ import ProjectForm from '../components/ProjectForm'
 import Dashboard from '../components/Dashboard'
 const PLACEHOLDER_WALLET = 'casper-wallet-not-connected'
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────
 
 export default function ProjectsPage() {
 
-    // â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── State ──────────────────────────────────────────────────────────
 
     /** All projects fetched from database */
     const [projects, setProjects] = useState([])
@@ -34,7 +35,7 @@ export default function ProjectsPage() {
     /** Active project (once created/selected by user) */
     const [activeProject, setActiveProject] = useState(null)
 
-    // â”€â”€ Fetch projects from database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Fetch projects from database ──────────────────────────────────
 
     /**
      * fetchProjects()
@@ -68,7 +69,7 @@ export default function ProjectsPage() {
     }, [])
 
     /**
-     * useEffect â€” runs once when the component mounts (page loads).
+     * useEffect — runs once when the component mounts (page loads).
      * Equivalent to componentDidMount in class components.
      * The empty dependency array [] means "run only on first render".
      */
@@ -76,7 +77,7 @@ export default function ProjectsPage() {
         fetchProjects()
     }, [fetchProjects])
 
-    // â”€â”€ Handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Handlers ────────────────────────────────────────────────────────
 
     /**
      * handleProjectCreate
@@ -87,18 +88,33 @@ export default function ProjectsPage() {
      * Now: awaits createProject(), throws on error (form shows it),
      * sets local state only AFTER a confirmed DB insert.
      *
-     * @param {object} projectData â€” from ProjectForm (goal_amount, owner_wallet, etc.)
+     * BUG FIX: owner_wallet must always come from the LIVE wallet accessor
+     * at submit time — never from a prop, cache, or placeholder fallback.
+     *
+     * @param {object} projectData — from ProjectForm (goal_amount, title, etc.)
      */
     const handleProjectCreate = async (projectData) => {
         console.log('[ProjectsPage] handleProjectCreate: received formData =', projectData)
-        console.log('[ProjectsPage] handleProjectCreate: calling mock database insertâ€¦')
 
-        // â”€â”€ 1. Real database INSERT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // -- 0. Resolve live wallet at submit time --------------------------------
+        // NEVER use a prop or cached value. Call the live accessor at submit time
+        // so we always get the currently active key even if the wallet was
+        // connected after the page loaded.
+        const liveWallet = await getActiveWalletAccount()
+        console.log('[ProjectsPage] handleProjectCreate: live wallet =', liveWallet)
+
+        if (!liveWallet) {
+            throw new Error('Connect your wallet before creating a project.')
+        }
+
+        console.log('[ProjectsPage] handleProjectCreate: calling database insert...')
+
+        // -- 1. Real database INSERT ----------------------------------------------
         const { data: newProject, error: insertError } = await createProject({
             title: projectData.title,
             description: projectData.description ?? '',
             goal_amount: projectData.goal_amount,
-            owner_wallet: projectData.owner_wallet || localStorage.getItem('arbit_casper_public_key') || PLACEHOLDER_WALLET,
+            owner_wallet: liveWallet,          // <- always the live public key
             contract_address: import.meta.env.VITE_CASPER_CONTRACT_HASH || '',
             status: 'active',
         })
@@ -108,9 +124,9 @@ export default function ProjectsPage() {
             throw new Error(insertError.message ?? 'Database insert failed')
         }
 
-        console.log('[ProjectsPage] handleProjectCreate: âœ“ project inserted:', newProject)
+        console.log('[ProjectsPage] handleProjectCreate: ✓ project inserted:', newProject)
 
-        // â”€â”€ BUG FIX: Save milestones to database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── BUG FIX: Save milestones to database ──────────────────────────
         // Previously milestones were only kept in local state with fake IDs,
         // causing "No milestones defined" on the dashboard.
         let savedMilestones = []
@@ -123,14 +139,14 @@ export default function ProjectsPage() {
                     amountAllocated: parseFloat(projectData.goal_amount) / rawMilestones.length,
                 }))
                 savedMilestones = await createMilestoneBatch(newProject.id, milestoneBatch)
-                console.log('[ProjectsPage] âœ“ milestones inserted:', savedMilestones)
+                console.log('[ProjectsPage] ✓ milestones inserted:', savedMilestones)
             } catch (milestoneErr) {
                 console.error('[ProjectsPage] milestone insert failed:', milestoneErr.message)
-                // Don't block â€” project was created, milestones can be added later
+                // Don't block — project was created, milestones can be added later
             }
         }
 
-        // â”€â”€ Normalise milestones shape for UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Normalise milestones shape for UI ──────────────────────────────
         const normalisedMilestones = savedMilestones.map(m => ({
             ...m,
             status: m.status ?? 'pending',
@@ -163,7 +179,7 @@ export default function ProjectsPage() {
                     type,
                     walletAddress: finalWallet,
                 })
-                console.log(`[ProjectsPage] âœ“ ${type} recorded in database`)
+                console.log(`[ProjectsPage] ✓ ${type} recorded in database`)
             } catch (err) {
                 console.error(`[ProjectsPage] Database error for ${type}:`, err.message)
             }
@@ -173,7 +189,7 @@ export default function ProjectsPage() {
         if (type === 'funding') {
             try {
                 await updateRaisedAmount(activeProject.id, amount)
-                console.log('[ProjectsPage] âœ“ raised_amount incremented in projects table')
+                console.log('[ProjectsPage] ✓ raised_amount incremented in projects table')
             } catch (err) {
                 console.error('[ProjectsPage] Failed to update project total:', err.message)
             }
@@ -197,15 +213,15 @@ export default function ProjectsPage() {
             localStorage.setItem(key, voterId)
         }
 
-        // â”€â”€ Pre-check: has this wallet already voted on this milestone? â”€â”€â”€â”€â”€â”€
+        // ── Pre-check: has this wallet already voted on this milestone? ──
         const alreadyVoted = await hasUserVoted(milestoneId, voterId)
         if (alreadyVoted) {
             console.info('[ProjectsPage] User has already voted on milestone:', milestoneId)
             alert('You have already voted on this milestone.')
-            return  // â† exit early, no 409 request, no double-count
+            return  // ← exit early, no 409 request, no double-count
         }
 
-        // â”€â”€ Insert vote into Supabase â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Insert vote into Supabase ────────────────────────────────────
         try {
             await voteOnMilestone({
                 milestoneId,
@@ -213,14 +229,14 @@ export default function ProjectsPage() {
                 vote: voteType === 'yes',
                 votingPower: 1,
             })
-            console.log(`[ProjectsPage] âœ“ Vote '${voteType}' recorded in DB for milestone:`, milestoneId)
+            console.log(`[ProjectsPage] ✓ Vote '${voteType}' recorded in DB for milestone:`, milestoneId)
         } catch (voteErr) {
             console.warn('[ProjectsPage] DB vote failed:', voteErr.message)
             alert(voteErr.message || 'Vote failed. Please try again.')
-            return  // â† don't update local state if the vote wasn't saved
+            return  // ← don't update local state if the vote wasn't saved
         }
 
-        // â”€â”€ Update local state only after a successful DB write â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Update local state only after a successful DB write ──────────
         setActiveProject(prev => ({
             ...prev,
             milestones: prev.milestones?.map(m => {
@@ -252,7 +268,7 @@ export default function ProjectsPage() {
         fetchProjects() // Refresh the list so totals are accurate when returning
     }
 
-    // â”€â”€ Route: show Dashboard if a project is active â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Route: show Dashboard if a project is active ──────────────────
     if (activeProject) {
         return (
             <Dashboard
@@ -264,7 +280,7 @@ export default function ProjectsPage() {
         )
     }
 
-    // â”€â”€ Route: show create form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Route: show create form ─────────────────────────────────────
     if (showForm) {
         return (
             <div>
@@ -277,21 +293,21 @@ export default function ProjectsPage() {
                         display: 'flex', alignItems: 'center', gap: '6px',
                     }}
                 >
-                    â† Back to Projects
+                    ← Back to Projects
                 </button>
+                {/* walletAddress is resolved live inside handleProjectCreate — not passed as a prop */}
                 <ProjectForm
                     onProjectCreate={handleProjectCreate}
-                    walletAddress={PLACEHOLDER_WALLET}
                 />
             </div>
         )
     }
 
-    // â”€â”€ Main view: project list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Main view: project list ─────────────────────────────────────
     return (
         <div>
 
-            {/* â”€â”€ Page header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {/* ── Page header ── */}
             <div style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 marginBottom: '28px', flexWrap: 'wrap', gap: '12px',
@@ -301,7 +317,7 @@ export default function ProjectsPage() {
                         Projects
                     </h1>
                     <p style={{ color: '#64748b', fontSize: '0.875rem' }}>
-                        {loading ? 'Loadingâ€¦' : `${projects.length} project${projects.length !== 1 ? 's' : ''} on Casper Network`}
+                        {loading ? 'Loading…' : `${projects.length} project${projects.length !== 1 ? 's' : ''} on Casper Network`}
                     </p>
                 </div>
 
@@ -340,7 +356,7 @@ export default function ProjectsPage() {
                 </div>
             </div>
 
-            {/* â”€â”€ Loading state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {/* ── Loading state ── */}
             {loading && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
                     {[1, 2, 3].map(i => (
@@ -361,7 +377,7 @@ export default function ProjectsPage() {
                 </div>
             )}
 
-            {/* â”€â”€ Error state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {/* ── Error state ── */}
             {!loading && error && (
                 <div style={{
                     background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)',
@@ -372,7 +388,7 @@ export default function ProjectsPage() {
                         <p style={{ color: '#f87171', fontWeight: 700, marginBottom: '6px' }}>Failed to load projects</p>
                         <p style={{ color: '#94a3b8', fontSize: '0.83rem', marginBottom: '14px' }}>{error}</p>
                         <p style={{ color: '#64748b', fontSize: '0.78rem' }}>
-                            âš  Common causes: schema.sql not run yet Â· RLS policy missing Â· wrong .env keys
+                            ⚠ Common causes: schema.sql not run yet · RLS policy missing · wrong .env keys
                         </p>
                         <button
                             onClick={fetchProjects}
@@ -388,7 +404,7 @@ export default function ProjectsPage() {
                 </div>
             )}
 
-            {/* â”€â”€ Empty state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {/* ── Empty state ── */}
             {!loading && !error && projects.length === 0 && (
                 <div style={{
                     background: 'rgba(15,17,35,0.85)', border: '1px solid rgba(255,255,255,0.06)',
@@ -422,7 +438,7 @@ export default function ProjectsPage() {
                 </div>
             )}
 
-            {/* â”€â”€ Projects grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {/* ── Projects grid ── */}
             {!loading && !error && projects.length > 0 && (
                 <>
                     {/* Count + filter bar */}
@@ -466,4 +482,3 @@ export default function ProjectsPage() {
         </div>
     )
 }
-

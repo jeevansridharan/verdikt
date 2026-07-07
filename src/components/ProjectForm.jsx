@@ -71,8 +71,10 @@ export default function ProjectForm({ onProjectCreate, walletAddress }) {
         const projectData = {
             title: title.trim(),
             description: description.trim(),
-            goal_amount: Number(fundingTarget),       // ← DB column name
-            owner_wallet: walletAddress ?? '',  // ← DB column name; wallet connection is required before submit
+            goal_amount: Number(fundingTarget),       // <- DB column name
+            // owner_wallet is intentionally omitted here.
+            // handleProjectCreate (in ProjectsPage) calls getActiveWalletAccount()
+            // live at submit time so it always gets the real connected public key.
             milestones: milestones.map((m, i) => ({
                 id: i,
                 title: m,
@@ -81,6 +83,7 @@ export default function ProjectForm({ onProjectCreate, walletAddress }) {
                 votes: { yes: 0, no: 0 },
             })),
         }
+
 
         console.log('[ProjectForm] handleSubmit: submitting projectData =', projectData)
 
