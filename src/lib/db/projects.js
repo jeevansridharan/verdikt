@@ -15,11 +15,12 @@ export async function createProject({
     goal_amount,
     owner_wallet,
     contract_address = '',
+    network = 'casper',   // ← always Casper for new projects created in this app
     status = 'active',
 }) {
     await delay();
     if (!title) return { data: null, error: { message: 'Title required' } }
-    
+
     const payload = {
         title: title.trim(),
         description: description.trim(),
@@ -27,6 +28,7 @@ export async function createProject({
         raised_amount: 0,
         owner_wallet: owner_wallet.trim(),
         contract_address: contract_address,
+        network,   // ← stamped on insert; mockDB.insert() also stamps it as a fallback
         status,
     }
 
@@ -34,16 +36,46 @@ export async function createProject({
     return { data, error: null }
 }
 
-export async function fetchProjects({ status, owner_wallet, limit = 50, offset = 0 } = {}) {
+/**
+ * fetchProjects({ status, owner_wallet, network, limit, offset })
+ *
+ * NETWORK FILTER (default: 'casper')
+ * ──────────────────────────────────────────────────────────────────────────
+ * By default this function returns ONLY projects tagged with network='casper'.
+ * Legacy EVM (network='hashkey') and BCH (network='bch') rows are excluded so
+ * they never surface in the Casper app UI or receive Casper funding transactions.
+ *
+ * To query all networks (e.g. for an admin audit), pass network: null explicitly.
+ */
+export async function fetchProjects({
+    status,
+    owner_wallet,
+    network = 'casper',   // ← default: Casper-only
+    limit = 50,
+    offset = 0
+} = {}) {
     await delay();
     let data = mockDB.getAll(TABLE)
-    
-    if (status) data = data.filter(p => p.status === status)
+
+    // ── Network filter (prevents EVM/BCH rows from showing in the Casper app) ──
+    if (network !== null && network !== undefined) {
+        const before = data.length
+        data = data.filter(p => p.network === network)
+        const excluded = before - data.length
+        if (excluded > 0) {
+            console.log(
+                `[projects] fetchProjects: excluded ${excluded} non-Casper row(s)` +
+                ` (network filter: '${network}')`
+            )
+        }
+    }
+
+    if (status)       data = data.filter(p => p.status === status)
     if (owner_wallet) data = data.filter(p => p.owner_wallet === owner_wallet)
-    
+
     data = data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     data = data.slice(offset, offset + limit)
-    
+
     return { data, error: null }
 }
 

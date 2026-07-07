@@ -289,3 +289,72 @@ GROUP BY  m.id;
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- ✅ DONE — Tables, indexes, RLS, functions, and views are ready.
 -- ═══════════════════════════════════════════════════════════════════════════════
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- MIGRATION: Add `network` column to projects
+-- Run this block once in Supabase SQL Editor to classify legacy EVM/BCH rows.
+--
+-- After running:
+--   network = 'casper'   → Casper Network projects  (01.../02... wallet keys)
+--   network = 'hashkey'  → Legacy HashKey/EVM rows  (0x... addresses)
+--   network = 'bch'      → Legacy BitcoinCash rows  (bitcoincash:q...)
+--   network = 'unknown'  → Rows created before this migration with unrecognised
+--                          wallet formats
+--
+-- IMPORTANT: This migration does NOT delete any rows. Legacy EVM/BCH projects
+-- are preserved in the database but filtered out of the live app UI by the
+-- application layer (fetchProjects defaults to network = 'casper').
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- 1. Add the column (safe to run multiple times — IF NOT EXISTS guard)
+ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS network TEXT NOT NULL DEFAULT 'casper'
+    CHECK (network IN ('casper', 'hashkey', 'bch', 'unknown'));
+
+-- 2. Backfill existing rows based on owner_wallet prefix
+UPDATE projects
+SET network = CASE
+    WHEN owner_wallet ILIKE '0x%'            THEN 'hashkey'
+    WHEN owner_wallet ILIKE '01%'
+      OR owner_wallet ILIKE '02%'            THEN 'casper'
+    WHEN owner_wallet ILIKE 'bitcoincash:%'  THEN 'bch'
+    ELSE 'unknown'
+END
+WHERE network = 'casper';   -- only touch rows that haven't been manually set
+
+-- 3. Partial index to make Casper-only queries fast
+CREATE INDEX IF NOT EXISTS idx_projects_network
+    ON projects(network);
+
+CREATE INDEX IF NOT EXISTS idx_projects_casper_active
+    ON projects(status, created_at DESC)
+    WHERE network = 'casper';
+
+-- 4. Rebuild project_summary view to include the network column
+CREATE OR REPLACE VIEW project_summary AS
+SELECT
+    p.id,
+    p.title,
+    p.description,
+    p.goal_amount,
+    p.raised_amount,
+    p.owner_wallet,
+    p.network,                                                                  -- ← new
+    p.status,
+    p.created_at,
+    ROUND((p.raised_amount / NULLIF(p.goal_amount, 0)) * 100, 2)  AS funded_percent,
+    COUNT(DISTINCT m.id)                                            AS milestone_count,
+    COUNT(DISTINCT m.id) FILTER (WHERE m.approved = true)          AS approved_milestones,
+    COUNT(DISTINCT t.id)                                            AS total_transactions,
+    COALESCE(SUM(DISTINCT t.amount) FILTER (WHERE t.type = 'funding'), 0) AS total_funded_onchain,
+    COUNT(DISTINCT v.wallet_address)                                AS unique_voters
+FROM       projects     p
+LEFT JOIN  milestones   m ON m.project_id = p.id
+LEFT JOIN  transactions t ON t.project_id = p.id
+LEFT JOIN  votes        v ON v.milestone_id = m.id
+GROUP BY   p.id;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ✅ MIGRATION COMPLETE
+-- ═══════════════════════════════════════════════════════════════════════════════
