@@ -38,45 +38,61 @@ export default function ProfilePage() {
             setLoading(true)
             setLoadError('')
 
-            const cachedKey = localStorage.getItem('arbit_casper_public_key')
-            console.log('[ProfilePage] loadConnectedWallet: cached key =', cachedKey?.slice(0, 12) ?? '(none)')
+            try {
+                // ── Guard: Casper Wallet extension not installed ──────────────────────
+                // Do NOT call getActiveWalletAccount() without this check.
+                // If the extension is absent, calling CasperWalletProvider() internally
+                // triggers a MetaMask fallback that throws an uncaught promise error.
+                if (typeof window === 'undefined' || typeof window.CasperWalletProvider !== 'function') {
+                    console.log('[ProfilePage] Casper Wallet extension not detected — skipping session restore')
+                    setLoading(false)
+                    return
+                }
 
-            // Always ask the live extension for the current account.
-            // Never blindly trust localStorage — that is the root cause of -32009.
-            const liveKey = await getActiveWalletAccount()
-            console.log('[ProfilePage] loadConnectedWallet: live key  =', liveKey?.slice(0, 12) ?? '(none)')
+                const cachedKey = localStorage.getItem('arbit_casper_public_key')
+                console.log('[ProfilePage] loadConnectedWallet: cached key =', cachedKey?.slice(0, 12) ?? '(none)')
 
-            if (!liveKey) {
-                // No active account in the wallet extension
-                if (cachedKey) {
-                    console.warn('[ProfilePage] loadConnectedWallet: no live key, clearing stale cache')
+                // Always ask the live extension for the current account.
+                // Never blindly trust localStorage — that is the root cause of -32009.
+                const liveKey = await getActiveWalletAccount()
+                console.log('[ProfilePage] loadConnectedWallet: live key  =', liveKey?.slice(0, 12) ?? '(none)')
+
+                if (!liveKey) {
+                    // No active account in the wallet extension
+                    if (cachedKey) {
+                        console.warn('[ProfilePage] loadConnectedWallet: no live key, clearing stale cache')
+                        localStorage.removeItem('arbit_casper_public_key')
+                    }
+                    setLoading(false)
+                    return
+                }
+
+                if (cachedKey && cachedKey !== liveKey) {
+                    console.warn('[ProfilePage] loadConnectedWallet: cached key differs from live key — using live key')
                     localStorage.removeItem('arbit_casper_public_key')
                 }
-                setLoading(false)
-                return
-            }
 
-            if (cachedKey && cachedKey !== liveKey) {
-                console.warn('[ProfilePage] loadConnectedWallet: cached key differs from live key — using live key')
-                localStorage.removeItem('arbit_casper_public_key')
-            }
+                // Verify the account exists on-chain before displaying it
+                try {
+                    console.log('[ProfilePage] loadConnectedWallet: fetching on-chain balance…')
+                    const bal = await getCsprBalance(liveKey)
+                    console.log('[ProfilePage] loadConnectedWallet: balance =', bal, 'CSPR')
 
-            // Verify the account exists on-chain before displaying it
-            try {
-                console.log('[ProfilePage] loadConnectedWallet: fetching on-chain balance…')
-                const bal = await getCsprBalance(liveKey)
-                console.log('[ProfilePage] loadConnectedWallet: balance =', bal, 'CSPR')
-
-                // Account confirmed valid — update cache and display
-                localStorage.setItem('arbit_casper_public_key', liveKey)
-                setAddress(liveKey)
-                setBalance(bal)
+                    // Account confirmed valid — update cache and display
+                    localStorage.setItem('arbit_casper_public_key', liveKey)
+                    setAddress(liveKey)
+                    setBalance(bal)
+                } catch (err) {
+                    const friendly = translateCasperError(err)
+                    console.error('[ProfilePage] loadConnectedWallet: on-chain check failed —', friendly)
+                    // Clear stale key so wallet panel shows Connect button
+                    localStorage.removeItem('arbit_casper_public_key')
+                    setLoadError(friendly)
+                }
             } catch (err) {
-                const friendly = translateCasperError(err)
-                console.error('[ProfilePage] loadConnectedWallet: on-chain check failed —', friendly)
-                // Clear stale key so wallet panel shows Connect button
-                localStorage.removeItem('arbit_casper_public_key')
-                setLoadError(friendly)
+                // Outer catch: silently swallow any unexpected startup errors
+                // (including any wallet provider shim errors)
+                console.warn('[ProfilePage] loadConnectedWallet: unexpected error (suppressed) —', err?.message ?? err)
             } finally {
                 setLoading(false)
             }

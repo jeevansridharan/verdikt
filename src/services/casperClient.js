@@ -86,24 +86,103 @@ export function translateCasperError(err) {
 /**
  * getCasperProvider()
  *
- * Polls for window.CasperWalletProvider every 100 ms for up to 2 seconds.
- * Resolves with the provider constructor if found, or null if not installed.
+ * Waits for window.CasperWalletProvider to be injected by the Casper Wallet
+ * browser extension content script.
+ *
+ * ── Why polling is required ───────────────────────────────────────────────────
+ * Browser extensions inject globals asynchronously via content scripts.
+ * When multiple wallet extensions are loaded, injection can be delayed by
+ * 2-5 seconds. A single 2-second check is insufficient.
+ *
+ * ── Strategy ─────────────────────────────────────────────────────────────────
+ * 1. POLL every 200 ms for up to 6 seconds (30 attempts).
+ *    Stop and resolve immediately the moment the provider appears.
+ * 2. EVENT HINTS: listen for 'CasperWalletProviderReady' (dispatched by some
+ *    versions of the Casper Wallet extension) and 'DOMContentLoaded' (fired
+ *    when the page finishes parsing) — both trigger an immediate check without
+ *    waiting for the next poll tick.
+ * 3. TIMEOUT: if still not found after 6 s, resolve(null) so callers can
+ *    show "Connect Casper Wallet" gracefully.
+ *
+ * ── Parameters ───────────────────────────────────────────────────────────────
+ * @param {number} [pollMs=200]      Poll interval in milliseconds
+ * @param {number} [timeoutMs=6000]  Maximum wait time before giving up
+ * @returns {Promise<Function|null>} Resolves with window.CasperWalletProvider
+ *                                   constructor, or null if not found.
  */
-export const getCasperProvider = () =>
-  new Promise((resolve) => {
-    let attempts = 0
-    const interval = setInterval(() => {
-      if (window.CasperWalletProvider) {
-        clearInterval(interval)
-        console.log('[casperClient] getCasperProvider: wallet extension detected ✓')
-        resolve(window.CasperWalletProvider)
-      } else if (++attempts > 20) {
-        clearInterval(interval)
-        console.warn('[casperClient] getCasperProvider: extension NOT found after 2 s')
-        resolve(null)
+export function getCasperProvider(pollMs = 200, timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    // Resolved flag prevents double-resolution from concurrent strategies
+    let resolved = false
+
+    function success(label) {
+      if (resolved) return
+      resolved = true
+      cleanup()
+      console.log(`[casperClient] getCasperProvider: wallet extension detected ✓ (via ${label})`)
+      resolve(window.CasperWalletProvider)
+    }
+
+    function timeout() {
+      if (resolved) return
+      resolved = true
+      cleanup()
+      console.warn(
+        `[casperClient] getCasperProvider: extension NOT found after ${timeoutMs / 1000} s` +
+        ' — install Casper Wallet or check the extension is enabled'
+      )
+      resolve(null)
+    }
+
+    // ── Cleanup helper: cancel all timers and event listeners ──────────────
+    let pollTimer = null
+    let deadlineTimer = null
+
+    function cleanup() {
+      if (pollTimer)    clearInterval(pollTimer)
+      if (deadlineTimer) clearTimeout(deadlineTimer)
+      window.removeEventListener('CasperWalletProviderReady', onEvent)
+      document.removeEventListener('DOMContentLoaded', onEvent)
+      pollTimer = null
+      deadlineTimer = null
+    }
+
+    // ── Immediate check (synchronous) ──────────────────────────────────────
+    // The extension may already be injected if the page loaded slowly.
+    if (typeof window !== 'undefined' && typeof window.CasperWalletProvider === 'function') {
+      console.log('[casperClient] getCasperProvider: wallet extension already present ✓')
+      resolve(window.CasperWalletProvider)
+      return
+    }
+
+    // ── Event-hint handler ─────────────────────────────────────────────────
+    // Some Casper Wallet builds fire 'CasperWalletProviderReady'; others don't.
+    // DOMContentLoaded is a common trigger point for extension injection.
+    function onEvent(evt) {
+      if (typeof window.CasperWalletProvider === 'function') {
+        success(evt.type)
       }
-    }, 100)
+      // If not yet present on this event, the poll loop will catch it shortly.
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('CasperWalletProviderReady', onEvent, { once: true })
+      if (document.readyState !== 'complete') {
+        document.addEventListener('DOMContentLoaded', onEvent, { once: true })
+      }
+    }
+
+    // ── Poll loop (primary strategy) ───────────────────────────────────────
+    pollTimer = setInterval(() => {
+      if (typeof window !== 'undefined' && typeof window.CasperWalletProvider === 'function') {
+        success('poll')
+      }
+    }, pollMs)
+
+    // ── Hard deadline ──────────────────────────────────────────────────────
+    deadlineTimer = setTimeout(timeout, timeoutMs)
   })
+}
 
 function walletProvider() {
   if (typeof window === 'undefined' || !window.CasperWalletProvider) {
@@ -117,13 +196,27 @@ function walletProvider() {
 /**
  * getActiveWalletAccount()
  *
- * Always queries the LIVE wallet extension for the current account.
- * Never reads localStorage.
+ * Returns the active Casper Wallet public key, or null if:
+ *   - The Casper Wallet extension is not installed
+ *   - No account is active in the extension
+ *   - Any error occurs
+ *
+ * NEVER throws. NEVER logs before checking for the extension.
+ * This is safe to call during app startup without a prior extension check.
  */
 export async function getActiveWalletAccount() {
+  // ── Guard: extension not installed ──────────────────────────────
+  // Do NOT call window.CasperWalletProvider() here if the extension is absent.
+  // Doing so causes the Casper Wallet shim to attempt a MetaMask fallback,
+  // which throws "Failed to connect to MetaMask: MetaMask extension not found".
+  if (typeof window === 'undefined' || typeof window.CasperWalletProvider !== 'function') {
+    // Silent: Casper Wallet extension not installed — expected during startup
+    return null
+  }
+
   console.log('[casperClient] getActiveWalletAccount: querying live wallet…')
   try {
-    const provider = walletProvider()
+    const provider = window.CasperWalletProvider()
     const publicKey = await provider.getActivePublicKey()
     console.log('[casperClient] getActiveWalletAccount: live key =', publicKey)
     return publicKey ?? null
