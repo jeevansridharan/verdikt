@@ -12,7 +12,17 @@ import {
   translateCasperError,
 } from '../services/casperClient'
 
-export default function WalletPanel({ onRealFund, onWalletConnect }) {
+/**
+ * Resolves the funding destination for a project.
+ * Priority: funding_wallet → owner_wallet → escrow_contract_hash
+ * Returns null if none is configured.
+ */
+function resolveFundingRecipient(project) {
+  if (!project) return null
+  return project.funding_wallet || project.owner_wallet || project.escrow_contract_hash || null
+}
+
+export default function WalletPanel({ onRealFund, onWalletConnect, project }) {
   const [publicKey, setPublicKey]       = useState('')
   const [balance, setBalance]           = useState(null)
   const [amount, setAmount]             = useState('')
@@ -145,9 +155,27 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
   }
 
   const fund = async () => {
-    const recipient = import.meta.env.VITE_CASPER_FUNDING_RECIPIENT
-    if (!recipient) return setError('VITE_CASPER_FUNDING_RECIPIENT is not configured.')
+    // ── Resolve the funding recipient from the project ───────────────────────
+    const recipient = resolveFundingRecipient(project)
+
+    // ── Diagnostic logs ───────────────────────────────────────────────────────
+    console.log('[WalletPanel] fund ─────────────────────────────────────────')
+    console.log('[WalletPanel]   Project ID      :', project?.id ?? '(none)')
+    console.log('[WalletPanel]   Funding wallet  :', recipient ?? '(not configured)')
+    console.log('[WalletPanel]   Sender          :', publicKey)
+    console.log('[WalletPanel]   Recipient       :', recipient)
+    console.log('[WalletPanel]   Amount (CSPR)   :', amount)
+    console.log('[WalletPanel] ──────────────────────────────────────────────')
+
+    if (!recipient) {
+      return setError('Project funding wallet is not configured.')
+    }
     if (!(Number(amount) > 0)) return setError('Enter a valid CSPR amount.')
+
+    // Guard: warn but don't block if sender === recipient (user funds own project)
+    if (publicKey && recipient && publicKey === recipient) {
+      console.warn('[WalletPanel] fund: sender === recipient — investor is funding their own project.')
+    }
 
     setLoading(true)
     setError('')
@@ -268,8 +296,18 @@ export default function WalletPanel({ onRealFund, onWalletConnect }) {
             <p className="text-xl font-bold text-emerald-400">{balance?.toFixed(4) ?? '—'} CSPR</p>
             <button onClick={refreshBalance} className="p-2 bg-white/5 rounded-lg text-slate-400"><RefreshCw size={14} /></button>
           </div>
-          <input type="number" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.0 CSPR" className="input-web3 w-full mb-3" />
-          <button onClick={fund} disabled={loading} className="w-full py-3.5 rounded-xl font-bold text-white gradient-btn-green flex items-center justify-center gap-2">
+          {/* Show funding destination or unconfigured warning */}
+          {resolveFundingRecipient(project) ? (
+            <p className="text-[10px] text-slate-500 mb-2 font-mono" title={resolveFundingRecipient(project)}>
+              → Recipient: {resolveFundingRecipient(project)?.slice(0, 8)}…{resolveFundingRecipient(project)?.slice(-6)}
+            </p>
+          ) : (
+            <p className="text-xs text-amber-400 mb-2">
+              ⚠ Project funding wallet is not configured.
+            </p>
+          )}
+          <input type="number" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.0 CSPR" className="input-web3 w-full mb-3" disabled={!resolveFundingRecipient(project)} />
+          <button onClick={fund} disabled={loading || !resolveFundingRecipient(project)} className="w-full py-3.5 rounded-xl font-bold text-white gradient-btn-green flex items-center justify-center gap-2" style={!resolveFundingRecipient(project) ? { opacity: 0.45, cursor: 'not-allowed' } : {}}>
             {loading && <Loader2 size={17} className="animate-spin" />} Fund project
           </button>
           <button onClick={disconnect} className="mt-4 text-slate-500 hover:text-red-400 text-xs w-full">Disconnect</button>

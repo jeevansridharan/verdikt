@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Dashboard.jsx â€” Arbit Project Dashboard
  *
  * AI evaluation is now milestone-scoped:
@@ -197,6 +197,7 @@ export default function Dashboard({ project: initialProject, onFund, onTransacti
             <WalletPanel
                 onRealFund={handleFundComplete}
                 onWalletConnect={setConnectedWallet}
+                project={project}
             />
 
             {/* â”€â”€ Milestones section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
